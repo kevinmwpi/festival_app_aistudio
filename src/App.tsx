@@ -123,6 +123,68 @@ export default function App() {
   const [scheduleFestId, setScheduleFestId] = useState<string | null>(null);
   const [focusedScheduleId, setFocusedScheduleId] = useState<string | null>(null);
 
+  const [meetupPoints, setMeetupPoints] = useState<MeetupPoint[]>(MEETUP_POINTS);
+  const [showAddPointModal, setShowAddPointModal] = useState(false);
+  const [isSelectingLocation, setIsSelectingLocation] = useState(false);
+  const [notifications, setNotifications] = useState<{ id: string; message: string; type: 'info' | 'warning'; createdAt: number }[]>([]);
+  const [newPoint, setNewPoint] = useState({ name: '', location: '', time: '20:00', type: 'stage' as const });
+
+  const addMeetupPoint = () => {
+    if (!newPoint.name || !newPoint.location) return;
+
+    // Generate ID with coordinates if it's a custom map point
+    const id = newPoint.location.includes('%') 
+      ? `custom-${Date.now()}-${newPoint.location.split('at ')[1].split('%')[0]}-${newPoint.location.split(', ')[1].split('%')[0]}`
+      : `m${Date.now()}`;
+
+    const type = newPoint.location.toLowerCase().includes('water') ? 'water' : 
+                 newPoint.location.toLowerCase().includes('food') || newPoint.location.toLowerCase().includes('chow') ? 'food' : 
+                 newPoint.location.toLowerCase().includes('exit') ? 'exit' : 'stage';
+    
+    const point: MeetupPoint = {
+      id,
+      name: newPoint.name,
+      location: newPoint.location,
+      type,
+      description: `Located near ${newPoint.location}, perfect for regrouping.`
+    };
+
+    setMeetupPoints(prev => [...prev, point]);
+    setShowAddPointModal(false);
+
+    // Check for live shows/artists at this time and location
+    const [hours, minutes] = newPoint.time.split(':').map(Number);
+    const timestamp = hours * 60 + minutes;
+    
+    const artistAtTime = selectedFestival.artists.find(a => {
+      const aStart = a.startTime;
+      const aEnd = (a.startTime + 60) % 1440; // Assume 1h set if not specified or use getDuration
+      // Simple check: is the meetup time during the set?
+      return a.stage === newPoint.location && timestamp >= aStart && timestamp <= (aStart + 90); // 90 min window
+    });
+
+    if (artistAtTime) {
+      const notification = {
+        id: `n${Date.now()}`,
+        message: `⚠️ Heads up! ${artistAtTime.name} is playing at ${artistAtTime.stage} during your meetup time (${newPoint.time}). It might be crowded!`,
+        type: 'warning' as const,
+        createdAt: Date.now()
+      };
+      setNotifications(prev => [notification, ...prev]);
+    } else {
+      const notification = {
+        id: `n${Date.now()}`,
+        message: `New meetup point added: ${newPoint.name} at ${newPoint.time}.`,
+        type: 'info' as const,
+        createdAt: Date.now()
+      };
+      setNotifications(prev => [notification, ...prev]);
+    }
+
+    // Reset form
+    setNewPoint({ name: '', location: '', time: '20:00', type: 'stage' });
+  };
+
   const selectedFestival = useMemo(() => 
     FESTIVALS.find(f => f.id === selectedFestivalId) || FESTIVALS[0], 
   [selectedFestivalId]);
@@ -168,6 +230,18 @@ export default function App() {
       setSelectedDay(availableDays[0]);
     }
   }, [selectedFestival, selectedDay]);
+
+  useEffect(() => {
+    if (notifications.length === 0) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const tenMinutes = 10 * 60 * 1000;
+      setNotifications(prev => prev.filter(n => now - n.createdAt < tenMinutes));
+    }, 10000); // Check every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [notifications.length]);
 
   // Persistence
   useEffect(() => {
@@ -822,7 +896,7 @@ export default function App() {
                 <div className="absolute bottom-20 right-10 w-40 h-40 bg-[#FDFD96]/40 rounded-full blur-xl animate-pulse" style={{ animationDelay: '1s' }} />
                 
                 {/* Markers */}
-                {MEETUP_POINTS.map((point, i) => (
+                {meetupPoints.map((point, i) => (
                   <motion.div 
                     key={point.id}
                     initial={{ scale: 0 }}
@@ -830,20 +904,70 @@ export default function App() {
                     transition={{ delay: i * 0.1 }}
                     className="absolute flex flex-col items-center"
                     style={{ 
-                      top: `${20 + (i * 25)}%`, 
-                      left: `${30 + (i * 20)}%` 
+                      top: point.id.startsWith('custom-') ? point.id.split('-')[3] + '%' : `${20 + (i * 25)}%`, 
+                      left: point.id.startsWith('custom-') ? point.id.split('-')[2] + '%' : `${30 + (i * 20)}%` 
                     }}
                   >
                     <div className="bg-white p-2 rounded-xl shadow-lg border-2 border-[#B2CEFE]">
                       {point.type === 'water' && <Droplets size={16} className="text-blue-400" />}
                       {point.type === 'food' && <Utensils size={16} className="text-orange-400" />}
                       {point.type === 'stage' && <Music size={16} className="text-purple-400" />}
+                      {point.type === 'exit' && <LogOut size={16} className="text-red-400" />}
                     </div>
                     <div className="bg-black/80 text-white text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 whitespace-nowrap">
                       {point.name}
                     </div>
                   </motion.div>
                 ))}
+
+                {isSelectingLocation && (
+                  <div 
+                    className="absolute inset-0 z-10 cursor-crosshair flex items-center justify-center bg-black/10 backdrop-blur-[1px]"
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const x = Math.round(((e.clientX - rect.left) / rect.width) * 100);
+                      const y = Math.round(((e.clientY - rect.top) / rect.height) * 100);
+                      
+                      // Find nearest landmark or just use coordinates
+                      const locationName = `Spot at ${x}%, ${y}%`;
+                      setNewPoint(prev => ({ ...prev, location: locationName }));
+                      setIsSelectingLocation(false);
+                      setShowAddPointModal(true);
+                    }}
+                  >
+                    <div className="bg-white/90 px-4 py-2 rounded-full shadow-2xl border-2 border-[#B2CEFE] animate-bounce flex items-center gap-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-[#B2CEFE]">Tap to set point</p>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsSelectingLocation(false);
+                          setShowAddPointModal(true);
+                        }}
+                        className="w-6 h-6 rounded-full bg-red-50 text-red-400 flex items-center justify-center"
+                      >
+                        <Plus size={14} className="rotate-45" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Preview Marker */}
+                {showAddPointModal && newPoint.location.includes('%') && (
+                  <div 
+                    className="absolute flex flex-col items-center z-20"
+                    style={{ 
+                      top: newPoint.location.split(', ')[1].split('%')[0] + '%', 
+                      left: newPoint.location.split('at ')[1].split('%')[0] + '%' 
+                    }}
+                  >
+                    <div className="bg-[#B2CEFE] p-2 rounded-xl shadow-lg border-2 border-white animate-pulse">
+                      <MapPin size={16} className="text-white" />
+                    </div>
+                    <div className="bg-white text-black text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 whitespace-nowrap shadow-sm border border-black/5">
+                      NEW POINT
+                    </div>
+                  </div>
+                )}
 
                 {/* Friend Marker Placeholder */}
                 {group && (
@@ -866,24 +990,60 @@ export default function App() {
               </div>
 
               <div className="space-y-4">
+                {notifications.length > 0 && (
+                  <div className="space-y-2">
+                    {notifications.map(n => (
+                      <motion.div 
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        key={n.id} 
+                        className={cn(
+                          "p-3 rounded-2xl text-[10px] font-bold border flex items-center gap-2",
+                          n.type === 'warning' ? "bg-red-50 border-red-100 text-red-600" : "bg-blue-50 border-blue-100 text-blue-600"
+                        )}
+                      >
+                        {n.type === 'warning' ? <AlertTriangle size={14} /> : <Plus size={14} />}
+                        <div className="flex-1 flex flex-col">
+                          <span>{n.message}</span>
+                          <span className="text-[8px] opacity-30 mt-0.5">
+                            {Math.floor((Date.now() - n.createdAt) / 60000)}m ago • Expiring soon
+                          </span>
+                        </div>
+                        <button onClick={() => setNotifications(prev => prev.filter(x => x.id !== n.id))} className="opacity-40 hover:opacity-100">
+                          <Check size={14} />
+                        </button>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="flex justify-between items-center ml-2">
                   <h3 className="text-sm font-bold uppercase tracking-widest opacity-40">Meetup Points</h3>
-                  <button className="text-[10px] font-black text-[#B2CEFE] uppercase tracking-widest">Add Point</button>
+                  <button 
+                    onClick={() => setShowAddPointModal(true)}
+                    className="text-[10px] font-black text-[#B2CEFE] uppercase tracking-widest hover:opacity-70 transition-opacity"
+                  >
+                    Add Point
+                  </button>
                 </div>
                 <div className="grid grid-cols-1 gap-3">
-                  {MEETUP_POINTS.map(point => (
+                  {meetupPoints.map(point => (
                     <div key={point.id} className="bg-white p-4 rounded-[32px] flex items-center gap-4 shadow-sm border border-black/5">
                       <div className={cn(
                         "w-12 h-12 rounded-2xl flex items-center justify-center",
-                        point.type === 'water' ? "bg-blue-50" : point.type === 'food' ? "bg-orange-50" : "bg-purple-50"
+                        point.type === 'water' ? "bg-blue-50" : point.type === 'food' ? "bg-orange-50" : point.type === 'exit' ? "bg-red-50" : "bg-purple-50"
                       )}>
                         {point.type === 'water' && <Droplets size={22} className="text-blue-400/60" />}
                         {point.type === 'food' && <Utensils size={22} className="text-orange-400/60" />}
-                        {point.type === 'stage' && <MapPin size={22} className="text-purple-400/60" />}
+                        {point.type === 'stage' && <Music size={22} className="text-purple-400/60" />}
+                        {point.type === 'exit' && <LogOut size={22} className="text-red-400/60" />}
                       </div>
                       <div className="flex-1">
                         <h4 className="font-bold text-base leading-tight">{point.name}</h4>
                         <p className="text-[10px] opacity-40 font-bold uppercase tracking-tight">{point.location}</p>
+                        {point.description && (
+                          <p className="text-[9px] opacity-60 mt-1 italic">{point.description}</p>
+                        )}
                       </div>
                       <button className="w-10 h-10 rounded-xl bg-[#F0F4FF] flex items-center justify-center text-[#B2CEFE]">
                         <ChevronRight size={18} />
@@ -908,8 +1068,10 @@ export default function App() {
                     <div 
                       key={fest.id}
                       className={cn(
-                        "p-6 rounded-[40px] text-left transition-all border-2 flex items-center justify-between group relative overflow-hidden",
-                        selectedFestivalId === fest.id ? "border-black/10 shadow-md" : "border-transparent opacity-80"
+                        "p-6 rounded-[40px] text-left transition-all border-2 flex items-center justify-between group relative overflow-hidden cursor-pointer active:scale-[0.98]",
+                        selectedFestivalId === fest.id 
+                          ? "border-black/20 shadow-lg ring-2 ring-black/5" 
+                          : "border-black/5 opacity-80 hover:border-black/10 hover:opacity-100"
                       )}
                       style={{ backgroundColor: fest.bg }}
                     >
@@ -945,6 +1107,99 @@ export default function App() {
               </div>
             </motion.div>
           )}
+          {/* Add Point Modal */}
+          <AnimatePresence>
+            {showAddPointModal && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowAddPointModal(false)}
+                  className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                />
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                  className="relative w-full max-w-sm bg-white rounded-[40px] p-8 shadow-2xl overflow-hidden"
+                >
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xl font-bold tracking-tight">Add Meetup Point</h3>
+                    <button onClick={() => setShowAddPointModal(false)} className="opacity-20 hover:opacity-100 transition-opacity">
+                      <Plus size={24} className="rotate-45" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-2 mb-1 block">Point Name</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. Sunset Regroup"
+                        value={newPoint.name}
+                        onChange={e => setNewPoint(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full bg-gray-50 border-none rounded-2xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#B2CEFE] transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-end mb-1">
+                        <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-2 block">Location / Landmark</label>
+                        <button 
+                          onClick={() => {
+                            setShowAddPointModal(false);
+                            setIsSelectingLocation(true);
+                          }}
+                          className="text-[9px] font-black text-[#B2CEFE] uppercase tracking-widest hover:opacity-70 transition-opacity flex items-center gap-1"
+                        >
+                          <MapPin size={10} /> Select on Map
+                        </button>
+                      </div>
+                      <select 
+                        value={newPoint.location}
+                        onChange={e => setNewPoint(prev => ({ ...prev, location: e.target.value }))}
+                        className="w-full bg-gray-50 border-none rounded-2xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#B2CEFE] transition-all"
+                      >
+                        <option value="">Select a location...</option>
+                        <optgroup label="Stages">
+                          {[...new Set(selectedFestival.artists.map(a => a.stage))].map(s => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="General">
+                          <option value="Main Entrance">Main Entrance</option>
+                          <option value="Food Court A">Food Court A</option>
+                          <option value="Water Station 1">Water Station 1</option>
+                          <option value="Ferris Wheel">Ferris Wheel</option>
+                        </optgroup>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-2 mb-1 block">Meeting Time</label>
+                      <input 
+                        type="time" 
+                        value={newPoint.time}
+                        onChange={e => setNewPoint(prev => ({ ...prev, time: e.target.value }))}
+                        className="w-full bg-gray-50 border-none rounded-2xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#B2CEFE] transition-all"
+                      />
+                    </div>
+
+                    <div className="pt-4">
+                      <button 
+                        onClick={addMeetupPoint}
+                        disabled={!newPoint.name || !newPoint.location}
+                        className="w-full bg-black text-white py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg shadow-black/10 active:scale-95 transition-all disabled:opacity-20"
+                      >
+                        Create Point
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
         </AnimatePresence>
       </main>
 

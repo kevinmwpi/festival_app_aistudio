@@ -23,6 +23,7 @@ export interface MeetupPoint {
   name: string;
   type: 'food' | 'water' | 'stage' | 'exit';
   location: string;
+  description?: string;
 }
 
 export interface Meetup {
