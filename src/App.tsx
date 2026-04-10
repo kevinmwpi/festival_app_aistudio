@@ -144,9 +144,11 @@ export default function App() {
     const point: MeetupPoint = {
       id,
       name: newPoint.name,
-      location: newPoint.location,
+      location: newPoint.location.includes('%') ? 'Custom Map Point' : newPoint.location,
       type,
-      description: `Located near ${newPoint.location}, perfect for regrouping.`
+      description: newPoint.location.includes('%') 
+        ? `Custom location pinned on the map.`
+        : `Located near ${newPoint.location}, perfect for regrouping.`
     };
 
     setMeetupPoints(prev => [...prev, point]);
@@ -1161,7 +1163,11 @@ export default function App() {
                         onChange={e => setNewPoint(prev => ({ ...prev, location: e.target.value }))}
                         className="w-full bg-gray-50 border-none rounded-2xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#B2CEFE] transition-all"
                       >
-                        <option value="">Select a location...</option>
+                        {newPoint.location && newPoint.location.includes('%') ? (
+                          <option value={newPoint.location}>📍 Selected on Map</option>
+                        ) : (
+                          <option value="">Select a location...</option>
+                        )}
                         <optgroup label="Stages">
                           {[...new Set(selectedFestival.artists.map(a => a.stage))].map(s => (
                             <option key={s} value={s}>{s}</option>
